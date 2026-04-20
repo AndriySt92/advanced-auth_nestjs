@@ -14,7 +14,9 @@
     "sourceMap": true,
     "outDir": "./dist",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@prisma/__generated__": ["./prisma/__generated__"],
+			"@prisma/__generated__/*": ["./prisma/__generated__/*"]
     },
     "incremental": true,
     "skipLibCheck": true,
@@ -25,6 +27,6 @@
     "noFallthroughCasesInSwitch": false,
     "types": ["node"]
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "prisma.config.ts"],
   "exclude": ["node_modules", "dist"]
 }
