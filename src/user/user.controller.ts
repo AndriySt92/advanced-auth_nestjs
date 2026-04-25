@@ -1,5 +1,8 @@
 import { Body, Controller, Get, Param, Patch } from '@nestjs/common';
 
+import { Authorization, CurrentUser } from '@/common/decorators';
+import { UserRole } from '@/generated/prisma/browser';
+
 import { UpdateUserDto } from './dto';
 import { UserService } from './user.service';
 
@@ -7,18 +10,24 @@ import { UserService } from './user.service';
 export class UserController {
     constructor(private readonly userService: UserService) {}
 
+    @Authorization()
     @Get('profile')
-    public async findProfile(userId: string) {
+    findProfile(@CurrentUser('id') userId: string) {
         return this.userService.findById(userId);
     }
 
+    @Authorization()
     @Patch('profile')
-    public async updateProfile(userId: string, @Body() dto: UpdateUserDto) {
+    updateProfile(
+        @CurrentUser('id') userId: string,
+        @Body() dto: UpdateUserDto,
+    ) {
         return this.userService.update(userId, dto);
     }
 
-    @Get('by-id/:id')
-    public async findById(@Param('id') id: string) {
+    @Authorization(UserRole.ADMIN)
+    @Get(':id')
+    findById(@Param('id') id: string) {
         return this.userService.findById(id);
     }
 }
