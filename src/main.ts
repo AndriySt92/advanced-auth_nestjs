@@ -6,7 +6,11 @@ import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import IORedis from 'ioredis';
 
-import { PrismaExceptionFilter } from '@/common/filters';
+import {
+    GlobalExceptionFilter,
+    HttpExceptionFilter,
+    PrismaExceptionFilter,
+} from '@/common/filters';
 import { ms, parseBoolean, StringValue } from '@/common/utils';
 
 import { AppModule } from './app.module';
@@ -26,7 +30,11 @@ async function bootstrap() {
         }),
     );
 
-    app.useGlobalFilters(new PrismaExceptionFilter());
+    app.useGlobalFilters(
+        new PrismaExceptionFilter(),
+        new HttpExceptionFilter(),
+        new GlobalExceptionFilter(),
+    );
 
     app.use(
         session({
