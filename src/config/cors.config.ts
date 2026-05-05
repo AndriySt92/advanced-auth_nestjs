@@ -1,0 +1,10 @@
+import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
+import { ConfigService } from '@nestjs/config';
+
+export function createCorsConfig(config: ConfigService): CorsOptions {
+    return {
+        origin: config.getOrThrow<string>('ALLOWED_ORIGIN'),
+        credentials: true,
+        exposedHeaders: ['set-cookie'],
+    };
+}

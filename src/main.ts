@@ -1,7 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { RedisStore } from 'connect-redis';
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import IORedis from 'ioredis';
@@ -11,9 +10,9 @@ import {
     HttpExceptionFilter,
     PrismaExceptionFilter,
 } from '@/common/filters';
-import { ms, parseBoolean, StringValue } from '@/common/utils';
 
 import { AppModule } from './app.module';
+import { createCorsConfig, createSessionConfig } from './config';
 
 async function bootstrap() {
     const app = await NestFactory.create(AppModule);
@@ -29,42 +28,17 @@ async function bootstrap() {
             transform: true,
         }),
     );
-
     app.useGlobalFilters(
         new PrismaExceptionFilter(),
         new HttpExceptionFilter(),
         new GlobalExceptionFilter(),
     );
 
-    app.use(
-        session({
-            secret: config.getOrThrow<string>('SESSION_SECRET'),
-            name: config.getOrThrow<string>('SESSION_NAME'),
-            resave: true,
-            saveUninitialized: false,
-            cookie: {
-                domain: config.getOrThrow<string>('SESSION_DOMAIN'),
-                maxAge: ms(config.getOrThrow<StringValue>('SESSION_MAX_AGE')),
-                httpOnly: parseBoolean(
-                    config.getOrThrow<string>('SESSION_HTTP_ONLY'),
-                ),
-                secure: parseBoolean(
-                    config.getOrThrow<string>('SESSION_SECURE'),
-                ),
-                sameSite: 'lax',
-            },
-            store: new RedisStore({
-                client: redis,
-                prefix: config.getOrThrow<string>('SESSION_FOLDER'),
-            }),
-        }),
-    );
+    const sessionConfig = createSessionConfig(config, redis);
+    const corsConfig = createCorsConfig(config);
 
-    app.enableCors({
-        origin: config.getOrThrow<string>('ALLOWED_ORIGIN'),
-        credentials: true,
-        exposedHeaders: ['set-cookie'],
-    });
+    app.use(session(sessionConfig));
+    app.enableCors(corsConfig);
 
     await app.listen(config.getOrThrow<number>('APPLICATION_PORT'));
 }
