@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     Injectable,
+    Logger,
     NotFoundException,
 } from '@nestjs/common';
 import type { Request } from 'express';
@@ -12,10 +13,11 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { UserService } from '@/user/user.service';
 
 import { SessionService } from '../session/session.service';
-import { ConfirmDto } from './dto/confirm.dto';
 
 @Injectable()
 export class EmailConfirmService {
+    private readonly logger = new Logger(EmailConfirmService.name);
+
     public constructor(
         private readonly prismaService: PrismaService,
         private readonly mailService: MailService,
@@ -23,10 +25,14 @@ export class EmailConfirmService {
         private readonly sessionService: SessionService,
     ) {}
 
-    public async newVerification(req: Request, dto: ConfirmDto): Promise<void> {
+    public async newVerification(req: Request, token: string): Promise<void> {
+        this.logger.log(
+            `Verifying email with token: ${token.substring(0, 8)}...`,
+        );
+
         const existingToken = await this.prismaService.token.findUnique({
             where: {
-                token: dto.token,
+                token: token,
                 type: TokenType.VERIFICATION,
             },
         });
@@ -36,6 +42,8 @@ export class EmailConfirmService {
                 'Verification token not found. Please make sure you provided a valid token.',
             );
         }
+
+        this.logger.log(`Token found for email: ${existingToken.email}`);
 
         const hasExpired = new Date(existingToken.expiresIn) < new Date();
 
@@ -55,6 +63,10 @@ export class EmailConfirmService {
             );
         }
 
+        this.logger.log(
+            `User found: ${existingUser.id} (${existingUser.email})`,
+        );
+
         await this.prismaService.$transaction([
             this.prismaService.user.update({
                 where: {
@@ -72,7 +84,13 @@ export class EmailConfirmService {
             }),
         ]);
 
+        this.logger.log(
+            `User ${existingUser.id} marked as verified, token deleted`,
+        );
+
         await this.sessionService.saveSession(req, existingUser);
+
+        this.logger.log(`Session saved for user ${existingUser.id}`);
     }
 
     public async sendVerificationToken(email: string): Promise<boolean> {
@@ -83,10 +101,14 @@ export class EmailConfirmService {
             verificationToken.token,
         );
 
+        this.logger.log(`Verification token sent to ${email}`);
+
         return true;
     }
 
     private async generateVerificationToken(email: string) {
+        this.logger.debug(`Generating new verification token for ${email}`);
+
         const token = uuidv4();
         const expiresIn = new Date(new Date().getTime() + 3600 * 1000);
 
@@ -114,6 +136,10 @@ export class EmailConfirmService {
                 type: TokenType.VERIFICATION,
             },
         });
+
+        this.logger.debug(
+            `New verification token created for ${email}, expires at ${expiresIn.toISOString()}`,
+        );
 
         return verificationToken;
     }
