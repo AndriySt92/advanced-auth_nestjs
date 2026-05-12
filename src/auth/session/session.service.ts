@@ -14,26 +14,28 @@ export class SessionService {
     ): Promise<{ user: User }> {
         return new Promise((resolve, reject) => {
             req.session.userId = user.id;
-            req.session.save((err) => {
+
+            req.session.save((err: Error | null) => {
                 if (err) {
                     reject(
                         new InternalServerErrorException(
-                            'Failed to save session',
+                            `Failed to save session: ${err.message}`,
                         ),
                     );
+                } else {
+                    resolve({ user });
                 }
-                resolve({ user });
             });
         });
     }
 
     public async logout(req: Request, res: Response): Promise<void> {
         return new Promise<void>((resolve, reject) => {
-            req.session.destroy((err) => {
+            req.session.destroy((err: Error | null) => {
                 if (err) {
                     reject(
                         new InternalServerErrorException(
-                            'Failed to destroy session',
+                            `Failed to destroy session: ${err.message}`,
                         ),
                     );
                     return;

@@ -1,13 +1,13 @@
 import { ConfigService } from '@nestjs/config';
 import { RedisStore } from 'connect-redis';
 import session from 'express-session';
-import IORedis from 'ioredis';
+import { RedisClientType } from 'redis';
 
 import { ms, parseBoolean, StringValue } from '@/common/utils';
 
 export function createSessionConfig(
     config: ConfigService,
-    redis: IORedis,
+    redis: RedisClientType,
 ): session.SessionOptions {
     return {
         secret: config.getOrThrow<string>('SESSION_SECRET'),
