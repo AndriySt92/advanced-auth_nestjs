@@ -45,13 +45,10 @@ export class PasswordRecoveryService {
         this.logger.log(`Password reset email sent to ${existingUser.email}`);
     }
 
-    public async newPassword(
-        dto: NewPasswordDto,
-        token: string,
-    ): Promise<void> {
-        const existingToken = await this.prismaService.token.findFirst({
+    public async newPassword(dto: NewPasswordDto): Promise<void> {
+        const existingToken = await this.prismaService.token.findUnique({
             where: {
-                token,
+                token: dto.token,
                 type: TokenType.PASSWORD_RESET,
             },
         });
