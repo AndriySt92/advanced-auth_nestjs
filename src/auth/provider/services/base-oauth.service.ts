@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     Injectable,
+    Logger,
     UnauthorizedException,
 } from '@nestjs/common';
 
@@ -16,14 +17,20 @@ type OAuthTokenResponse = {
 @Injectable()
 export class BaseOAuthService {
     private BASE_URL: string = '';
+    logger = new Logger(BaseOAuthService.name);
 
-    public constructor(private readonly options: TypeBaseProviderOptions) {}
+    public constructor(protected readonly options: TypeBaseProviderOptions) {}
 
     protected extractUserInfo(data: Record<string, unknown>): TypeUserInfo {
+        this.logger.debug(
+            `Extracting user info for provider ${this.options.name}`,
+        );
         const id = this.getStringValue(data, 'id');
         const picture = this.getStringValue(data, 'picture');
         const name = this.getStringValue(data, 'name');
         const email = this.getStringValue(data, 'email');
+
+        this.logger.debug(`Extracted user: ${email} (${id})`);
 
         return {
             id,
@@ -32,6 +39,62 @@ export class BaseOAuthService {
             email,
             provider: this.options.name,
         };
+    }
+
+    protected async exchangeCodeForTokens(
+        code: string,
+    ): Promise<OAuthTokenResponse> {
+        this.logger.debug(
+            `Exchanging code for tokens with ${this.options.access_url}`,
+        );
+        const tokenQuery = new URLSearchParams({
+            client_id: this.options.client_id,
+            client_secret: this.options.client_secret,
+            code,
+            redirect_uri: this.getRedirectUrl(),
+            grant_type: 'authorization_code',
+        });
+
+        const response = await fetch(this.options.access_url, {
+            method: 'POST',
+            body: tokenQuery,
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Accept: 'application/json',
+            },
+        });
+
+        if (!response.ok) {
+            throw new BadRequestException('Token exchange failed');
+        }
+        this.logger.log(`Tokens obtained for provider ${this.options.name}`);
+
+        return this.parseTokenResponse(await response.json());
+    }
+
+    protected async fetchUserProfile(
+        accessToken: string,
+    ): Promise<Record<string, unknown>> {
+        this.logger.debug(
+            `Fetching user profile from ${this.options.profile_url}`,
+        );
+
+        const response = await fetch(this.options.profile_url, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        if (!response.ok) {
+            throw new UnauthorizedException(
+                `Failed to fetch the user profile from ${this.options.profile_url}. Please verify the access token.`,
+            );
+        }
+
+        const user = this.parseUserInfoResponse(await response.json());
+
+        this.logger.log(
+            `User profile fetched for provider ${this.options.name}`,
+        );
+        return user;
     }
 
     public getAuthUrl(): string {
@@ -43,56 +106,26 @@ export class BaseOAuthService {
             access_type: 'offline',
             prompt: 'select_account',
         });
+        this.logger.debug(`Generated auth URL for ${this.options.name}`);
 
         return `${this.options.authorize_url}?${query}`;
     }
 
     public async findUserByCode(code: string): Promise<TypeUserInfo> {
-        const clientId = this.options.client_id;
-        const clientSecret = this.options.client_secret;
+        this.logger.debug(
+            `Starting findUserByCode for provider ${this.options.name}`,
+        );
 
-        const tokenQuery = new URLSearchParams({
-            client_id: clientId,
-            client_secret: clientSecret,
-            code,
-            redirect_uri: this.getRedirectUrl(),
-            grant_type: 'authorization_code',
-        });
+        const tokens = await this.exchangeCodeForTokens(code);
+        const user = await this.fetchUserProfile(tokens.access_token);
+        const extractedUserData = this.extractUserInfo(user);
 
-        const tokensRequest = await fetch(this.options.access_url, {
-            method: 'POST',
-            body: tokenQuery,
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                Accept: 'application/json',
-            },
-        });
-
-        if (!tokensRequest.ok) {
-            throw new BadRequestException(
-                `Failed to fetch tokens from ${this.options.access_url}. Please make sure the authorization code is valid.`,
-            );
-        }
-
-        const tokens = this.parseTokenResponse(await tokensRequest.json());
-
-        const userRequest = await fetch(this.options.profile_url, {
-            headers: {
-                Authorization: `Bearer ${tokens.access_token}`,
-            },
-        });
-
-        if (!userRequest.ok) {
-            throw new UnauthorizedException(
-                `Failed to fetch the user profile from ${this.options.profile_url}. Please verify the access token.`,
-            );
-        }
-
-        const user = this.parseUserInfoResponse(await userRequest.json());
-        const userData = this.extractUserInfo(user);
+        this.logger.log(
+            `User authenticated via ${this.options.name}: ${extractedUserData.email}`,
+        );
 
         return {
-            ...userData,
+            ...extractedUserData,
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
             expires_at: tokens.expires_at ?? tokens.expires_in,
@@ -106,6 +139,9 @@ export class BaseOAuthService {
 
     public set baseUrl(value: string) {
         this.BASE_URL = value;
+        this.logger.debug(
+            `Base URL set to ${value} for provider ${this.options.name}`,
+        );
     }
 
     public get name(): string {
