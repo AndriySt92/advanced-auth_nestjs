@@ -36,6 +36,8 @@ model Account {
 
   type     String
   provider String
+  providerId String   @map("provider_id")
+
 
   refreshToken String? @map("refresh_token")
   accessToken  String? @map("access_token")
@@ -47,6 +49,7 @@ model Account {
   user   User?   @relation(fields: [userId], references: [id])
   userId String? @map("user_id")
 
+  @@unique([provider, providerId])
   @@map("accounts")
 }
 
@@ -60,6 +63,8 @@ model Token {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@unique([email, type])
+
   @@map("tokens")
 }
 
@@ -71,6 +76,8 @@ enum UserRole {
 enum AuthMethod {
   CREDENTIALS
   GOOGLE
+  FACEBOOK
+  GITHUB
 }
 
 enum TokenType {

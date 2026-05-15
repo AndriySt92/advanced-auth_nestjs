@@ -16,6 +16,7 @@ export class GoogleProvider extends BaseOAuthService {
 
     public extractUserInfo(data: GoogleProfile): TypeUserInfo {
         return super.extractUserInfo({
+            id: data.sub,
             email: data.email,
             name: data.name,
             picture: data.picture,
