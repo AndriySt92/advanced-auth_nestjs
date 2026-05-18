@@ -43,7 +43,6 @@ export class TwoFactorAuthService {
             new Date(existingToken.expiresIn) > new Date();
 
         if (!isValid) {
-            this.logger.warn(`Invalid 2FA attempt for ${email}`);
             throw new BadRequestException('Invalid or expired 2FA token');
         }
 

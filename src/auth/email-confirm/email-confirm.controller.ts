@@ -12,6 +12,11 @@ export class EmailConfirmController {
         @Req() req: Request,
         @Query('token') token: string,
     ) {
-        return this.emailConfirmService.newVerification(req, token);
+        await this.emailConfirmService.newVerification(req, token);
+
+        return {
+            message:
+                'Your email has been successfully verified. You can now log in.',
+        };
     }
 }
