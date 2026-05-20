@@ -16,6 +16,7 @@
     "outDir": "./dist",
     "paths": {
       "@/*": ["./src/*"],
+      "@test/*": ["./test/*"]
     },
     "incremental": true,
     "skipLibCheck": true,
@@ -24,8 +25,8 @@
     "noImplicitAny": false,
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
-    "types": ["node"]
+    "types": ["node", "jest"]
   },
-  "include": ["src/**/*", "prisma.config.ts"],
+  "include": ["src/**/*", "test/**/*", "prisma.config.ts", "jest.config.ts"],
   "exclude": ["node_modules", "dist"]
 }
