@@ -4,6 +4,7 @@ import {
     NotFoundException,
     UnauthorizedException,
 } from '@nestjs/common';
+import { createLoginDto, createProfile } from '@test/factories';
 import {
     createUser,
     createUserWithAccounts,
@@ -17,7 +18,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { UserService } from '@/user/user.service';
 
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto } from './dto';
+import { RegisterDto } from './dto';
 import { EmailConfirmService } from './email-confirm/email-confirm.service';
 import { ProviderService } from './provider/provider.service';
 import { TypeUserInfo } from './provider/services/types';
@@ -291,24 +292,4 @@ describe('AuthService', () => {
         await expect(service.logout(req, res)).resolves.toBeUndefined();
         expect(sessionService.logout).toHaveBeenCalledWith(req, res);
     });
-});
-
-const createLoginDto = (overrides: Partial<LoginDto> = {}): LoginDto => ({
-    email: 'user@example.com',
-    password: 'password123',
-    ...overrides,
-});
-
-const createProfile = (
-    overrides: Partial<TypeUserInfo> = {},
-): TypeUserInfo => ({
-    id: 'provider-user-id',
-    email: 'user@example.com',
-    name: 'OAuth User',
-    picture: 'https://example.com/avatar.png',
-    provider: 'google',
-    access_token: 'access-token',
-    refresh_token: 'refresh-token',
-    expires_at: 3600,
-    ...overrides,
 });

@@ -3,7 +3,6 @@ name: E2E
 on:
   push:
     branches:
-      - feature/testing
       - develop
   pull_request:
     branches:
@@ -11,6 +10,7 @@ on:
 
 jobs:
   e2e:
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')
     name: E2E Tests
     runs-on: ubuntu-latest
 
