@@ -11,7 +11,7 @@ export const getMailerConfig = (
         port: configService.getOrThrow<number>('MAIL_PORT'),
         secure: !isDev(configService),
         auth: {
-            user: configService.getOrThrow<string>('MAIL_LOGIN'),
+            user: configService.getOrThrow<string>('MAIL_USER'),
             pass: configService.getOrThrow<string>('MAIL_PASSWORD'),
         },
         tls: {
@@ -19,6 +19,6 @@ export const getMailerConfig = (
         },
     },
     defaults: {
-        from: `"Max Team" ${configService.getOrThrow<string>('MAIL_LOGIN')}`,
+        from: `"Max Team" ${configService.getOrThrow<string>('MAIL_USER')}`,
     },
 });

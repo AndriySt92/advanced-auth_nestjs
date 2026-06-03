@@ -1,8 +1,5 @@
 import 'dotenv/config';
-
-import { defineConfig } from 'prisma/config';
-
-const postgresUri = `postgresql://${process.env.POSTGRES_USER}:${process.env.POSTGRES_PASSWORD}@${process.env.POSTGRES_HOST}:${process.env.POSTGRES_PORT}/${process.env.POSTGRES_DB}`;
+import { defineConfig, env } from 'prisma/config';
 
 export default defineConfig({
     schema: 'prisma/schema.prisma',
@@ -10,6 +7,6 @@ export default defineConfig({
         path: 'prisma/migrations',
     },
     datasource: {
-        url: postgresUri,
+        url: env('DATABASE_URL'),
     },
 });

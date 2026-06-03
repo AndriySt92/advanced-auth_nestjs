@@ -43,11 +43,11 @@ export class UserService {
             },
         });
 
-        if (!user)
-            throw new NotFoundException(
-                'User not found. Please check the provided data.',
-            );
-        this.logger.log(`User found: ${user?.email} (ID: ${user?.id})`);
+        if (user) {
+            this.logger.log(`User found: ${user.email} (ID: ${user.id})`);
+        } else {
+            this.logger.warn(`User not found with email: ${email}`);
+        }
 
         return user;
     }

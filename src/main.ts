@@ -19,7 +19,7 @@ async function bootstrap() {
 
     const config = app.get(ConfigService);
     const redis: RedisClientType = createClient({
-        url: config.getOrThrow<string>('REDIS_URI'),
+        url: config.getOrThrow<string>('REDIS_URL'),
     });
     await redis.connect();
 
