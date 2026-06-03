@@ -38,13 +38,19 @@ export async function createE2EApp(
 }
 
 export async function closeE2EApp(
-    app: INestApplication,
-    prisma: PrismaService,
-    redis: RedisClientType,
+    app?: INestApplication,
+    prisma?: PrismaService,
+    redis?: RedisClientType,
 ) {
-    await app.close();
-    await redis.quit();
-    await prisma.$disconnect();
+    if (app) {
+        await app.close();
+    }
+    if (redis) {
+        await redis.quit();
+    }
+    if (prisma) {
+        await prisma.$disconnect();
+    }
 }
 
 export async function clearDatabase(
