@@ -66,9 +66,13 @@ export class AuthService {
 
         const user = await this.userService.findByEmail(dto.email);
 
-        if (!user || !user.password) {
-            throw new NotFoundException(
-                'User not found. Please check your credentials.',
+        if (!user) {
+            throw new UnauthorizedException('Invalid credentials');
+        }
+
+        if (!user.password) {
+            throw new BadRequestException(
+                `Please login using ${user.method.toLowerCase()} provider`,
             );
         }
 
