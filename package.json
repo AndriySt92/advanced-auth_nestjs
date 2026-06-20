@@ -26,7 +26,10 @@
         "test:e2e:reset": "dotenv -e .env.ci -- prisma migrate reset --force",
         "test:e2e:run": "cross-env NODE_OPTIONS='--experimental-vm-modules' dotenv -e .env.ci -- jest --config ./test/jest-e2e.json --runInBand",
         "test:e2e:ci": "npm run test:e2e:docker:up && npm run test:e2e:wait:postgres && npm run test:e2e:wait:redis && npm run test:e2e:setup:db && npm run test:e2e:run",
-        "test:e2e:local": "npm run test:e2e:docker:down && npm run test:e2e:ci && npm run test:e2e:docker:down"
+        "test:e2e:local": "npm run test:e2e:docker:down && npm run test:e2e:ci && npm run test:e2e:docker:down",
+        "docker:up": "docker compose --env-file .env.docker up -d --build",
+        "docker:down": "docker compose down -v",
+        "db:deploy": "npx prisma migrate deploy && npx prisma generate"
     },
     "lint-staged": {
         "{ts,js}": [
