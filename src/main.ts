@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
-import { createClient, RedisClientType } from 'redis';
 
 import {
     GlobalExceptionFilter,
@@ -13,15 +12,13 @@ import {
 
 import { AppModule } from './app.module';
 import { createCorsConfig, createSessionConfig } from './config';
+import { RedisService } from './redis/redis.service';
 
 async function bootstrap() {
     const app = await NestFactory.create(AppModule);
 
     const config = app.get(ConfigService);
-    const redis: RedisClientType = createClient({
-        url: config.getOrThrow<string>('REDIS_URL'),
-    });
-    await redis.connect();
+    const redisService = app.get(RedisService);
 
     app.use(cookieParser(config.getOrThrow<string>('COOKIES_SECRET')));
 
@@ -36,7 +33,7 @@ async function bootstrap() {
         new PrismaExceptionFilter(),
     );
 
-    const sessionConfig = createSessionConfig(config, redis);
+    const sessionConfig = createSessionConfig(config, redisService.client);
     const corsConfig = createCorsConfig(config);
 
     app.use(session(sessionConfig));
