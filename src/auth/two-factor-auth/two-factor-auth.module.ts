@@ -2,12 +2,14 @@ import { Module } from '@nestjs/common';
 
 import { MailModule } from '@/libs/mail/mail.module';
 import { PrismaModule } from '@/prisma/prisma.module';
+import { RedisModule } from '@/redis/redis.module';
 
 import { TwoFactorAuthService } from './two-factor-auth.service';
+import { TwoFactorRateLimitService } from './two-factor-rate-limits.service';
 
 @Module({
-    imports: [MailModule, PrismaModule],
-    providers: [TwoFactorAuthService],
-    exports: [TwoFactorAuthService],
+    imports: [MailModule, PrismaModule, RedisModule],
+    providers: [TwoFactorAuthService, TwoFactorRateLimitService],
+    exports: [TwoFactorAuthService, TwoFactorRateLimitService],
 })
 export class TwoFactorAuthModule {}
