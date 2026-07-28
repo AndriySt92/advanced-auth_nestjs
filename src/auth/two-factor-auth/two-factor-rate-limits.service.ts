@@ -2,7 +2,10 @@ import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 
 import { RedisService } from '@/redis/redis.service';
 
-import { TWO_FACTOR_CONFIG } from '../auth.constants';
+import {
+    TWO_FACTOR_CONFIG,
+    TWO_FACTOR_REDIS_KEYS,
+} from './two-factor-auth.constants';
 
 @Injectable()
 export class TwoFactorRateLimitService {
@@ -72,10 +75,10 @@ export class TwoFactorRateLimitService {
     }
 
     private getCounterKey(userId: string): string {
-        return `2fa:resend:count:${userId}`;
+        return `${TWO_FACTOR_REDIS_KEYS.RESEND_COUNT}:${userId}`;
     }
 
     private getCooldownKey(userId: string): string {
-        return `2fa:resend:cooldown:${userId}`;
+        return `${TWO_FACTOR_REDIS_KEYS.RESEND_COOLDOWN}:${userId}`;
     }
 }

@@ -1,88 +1,307 @@
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { Logger } from '@nestjs/common';
+import {
+    BadRequestException,
+    HttpException,
+    HttpStatus,
+    Injectable,
+    InternalServerErrorException,
+    Logger,
+    UnauthorizedException,
+} from '@nestjs/common';
+import { Request, Response } from 'express';
 
-import { TokenType } from '@/generated/prisma/client';
+import { User } from '@/generated/prisma/client';
 import { MailService } from '@/libs/mail/mail.service';
-import { PrismaService } from '@/prisma/prisma.service';
+import { RedisService } from '@/redis/redis.service';
+import { UserService } from '@/user/user.service';
+
+import { SessionService } from '../session/session.service';
+import {
+    TWO_FACTOR_CONFIG,
+    TWO_FACTOR_REDIS_KEYS,
+} from './two-factor-auth.constants';
+import { TwoFactorRateLimitService } from './two-factor-rate-limits.service';
+
+interface TwoFactorToken {
+    email: string;
+    code: string;
+}
 
 @Injectable()
 export class TwoFactorAuthService {
     private readonly logger = new Logger(TwoFactorAuthService.name);
 
     public constructor(
-        private readonly prismaService: PrismaService,
         private readonly mailService: MailService,
+        private readonly redisService: RedisService,
+        private readonly sessionService: SessionService,
+        private readonly twoFactorRateLimitService: TwoFactorRateLimitService,
+        private readonly userService: UserService,
     ) {}
 
-    public async sendTwoFactorToken(email: string): Promise<void> {
+    public async sendTwoFactorToken(
+        email: string,
+    ): Promise<{ challengeId: string }> {
         const twoFactorToken = await this.generateTwoFactorToken(email);
 
         await this.mailService.sendTwoFactorTokenEmail(
-            twoFactorToken.email,
-            twoFactorToken.token,
+            email,
+            twoFactorToken.code,
         );
 
         this.logger.log(`2FA token sent to ${email}`);
+
+        return {
+            challengeId: twoFactorToken.challengeId,
+        };
     }
 
     public async validateTwoFactorToken(
-        email: string,
+        challengeId: string,
         code: string,
     ): Promise<void> {
-        const existingToken = await this.prismaService.token.findFirst({
-            where: {
-                email,
-                type: TokenType.TWO_FACTOR,
-            },
-        });
+        const tokenKey = this.getTokenKey(challengeId);
 
-        const isValid =
-            existingToken?.token === code &&
-            new Date(existingToken.expiresIn) > new Date();
+        const tokenData = await this.redisService.get(tokenKey);
 
-        if (!isValid) {
-            throw new BadRequestException('Invalid or expired 2FA token');
+        this.logger.log(`Validating 2FA challenge ${challengeId}`);
+
+        if (!tokenData) {
+            throw new BadRequestException(
+                'Invalid or expired verification code.',
+            );
         }
 
-        await this.prismaService.token.delete({
-            where: {
-                id: existingToken.id,
-                type: TokenType.TWO_FACTOR,
-            },
-        });
+        const parsedToken: unknown = JSON.parse(tokenData);
 
-        this.logger.log(`2FA validated for ${email}`);
+        if (!this.isTwoFactorToken(parsedToken)) {
+            this.logger.error(
+                `Invalid 2FA token data stored for challenge ${challengeId}`,
+            );
+
+            throw new InternalServerErrorException(
+                'Invalid two-factor authentication token data.',
+            );
+        }
+
+        const token = parsedToken;
+
+        if (token.code !== code) {
+            const attempts = await this.recordFailedAttempt(challengeId);
+
+            await this.checkAttemptsNumber(attempts, challengeId);
+
+            throw new BadRequestException('Invalid verification code.');
+        }
+        // The verification code is correct, so delete the used token and attempts.
+        await this.deleteTwoFactorToken(challengeId);
+        await this.deleteAttempts(challengeId);
+
+        this.logger.log(`2FA validated for ${token.email}`);
+    }
+
+    public async authenticate(
+        req: Request,
+        res: Response,
+        user: User,
+        code?: string,
+    ): Promise<{ message: string } | { user: User }> {
+        if (!code) {
+            const { challengeId } = await this.sendTwoFactorToken(user.email);
+
+            await this.sessionService.savePendingTwoFactorSession(
+                req,
+                res,
+                user.id,
+                challengeId,
+            );
+
+            return {
+                message:
+                    'Check your email. Two-factor authentication code is required.',
+            };
+        }
+
+        const challengeId = req.session.pendingTwoFactor?.challengeId;
+
+        if (!challengeId) {
+            throw new UnauthorizedException(
+                'Two-factor authentication session has expired.',
+            );
+        }
+
+        await this.validateTwoFactorToken(challengeId, code);
+
+        return this.sessionService.completeTwoFactorAuthentication(
+            req,
+            res,
+            user,
+        );
+    }
+
+    public async resend(req: Request, res: Response) {
+        const pending = req.session.pendingTwoFactor;
+
+        if (!pending) {
+            this.logger.warn(
+                '2FA resend rejected: pending 2FA session not found',
+            );
+
+            throw new UnauthorizedException(
+                'Two-factor authentication session has expired.',
+            );
+        }
+
+        if (pending.expiresAt < Date.now()) {
+            this.logger.warn(
+                `2FA resend rejected: pending 2FA session expired for user ${pending.userId}`,
+            );
+
+            await this.sessionService.clearPendingTwoFactorSession(req, res);
+
+            throw new UnauthorizedException(
+                'Two-factor authentication session expired.',
+            );
+        }
+
+        const user = await this.userService.findById(pending.userId);
+
+        this.logger.debug(`Processing 2FA resend request for user ${user.id}`);
+
+        await this.twoFactorRateLimitService.check(pending.userId);
+
+        // Invalidate the old 2FA token and attempts, generate a new challengeId, and send a new code to the user's email.
+        const { challengeId } = await this.replaceTwoFactorToken(
+            pending.challengeId,
+            user.email,
+        );
+
+        // Associate the new challengeId with the current pending session so the next verification uses the latest code
+        await this.sessionService.updatePendingTwoFactorSession(
+            req,
+            res,
+            challengeId,
+        );
+
+        await this.twoFactorRateLimitService.recordResend(pending.userId);
+
+        this.logger.log(
+            `2FA verification code resent successfully for user ${user.id}`,
+        );
+
+        return {
+            message:
+                'A new verification code has been sent on your email. Please check your email.',
+        };
+    }
+
+    private async checkAttemptsNumber(
+        attempts: number,
+        challengeId: string,
+    ): Promise<void> {
+        if (attempts >= TWO_FACTOR_CONFIG.MAX_VERIFICATION_ATTEMPTS) {
+            await this.deleteTwoFactorToken(challengeId);
+            await this.deleteAttempts(challengeId);
+
+            this.logger.warn(
+                `2FA verification attempts exceeded for challenge ${challengeId}`,
+            );
+
+            throw new HttpException(
+                'You have exceeded the maximum number of verification attempts. Please request a new verification code.',
+                HttpStatus.TOO_MANY_REQUESTS,
+            );
+        }
+    }
+
+    private async recordFailedAttempt(challengeId: string): Promise<number> {
+        const attemptsKey = this.getAttemptKey(challengeId);
+        const attempts = await this.redisService.incr(attemptsKey);
+
+        if (attempts === 1) {
+            await this.redisService.expire(
+                attemptsKey,
+                TWO_FACTOR_CONFIG.TOKEN_TTL_SECONDS,
+            );
+        }
+
+        this.logger.warn(
+            `Failed 2FA verification attempt for challenge ${challengeId}. Attempts: ${attempts}/${TWO_FACTOR_CONFIG.MAX_VERIFICATION_ATTEMPTS}`,
+        );
+
+        return attempts;
+    }
+
+    private async replaceTwoFactorToken(
+        oldChallengeId: string,
+        email: string,
+    ): Promise<{ challengeId: string }> {
+        await this.deleteTwoFactorToken(oldChallengeId);
+        await this.deleteAttempts(oldChallengeId);
+
+        const { challengeId, code } = await this.generateTwoFactorToken(email);
+
+        await this.mailService.sendTwoFactorTokenEmail(email, code);
+
+        this.logger.log(`2FA token resent to ${email}`);
+
+        return {
+            challengeId,
+        };
+    }
+
+    private async deleteTwoFactorToken(challengeId: string): Promise<void> {
+        const tokenKey = this.getTokenKey(challengeId);
+        await this.redisService.del(tokenKey);
+    }
+
+    private async deleteAttempts(challengeId: string): Promise<void> {
+        const attemptKey = this.getAttemptKey(challengeId);
+        await this.redisService.del(attemptKey);
     }
 
     private async generateTwoFactorToken(email: string): Promise<{
-        token: string;
-        id: string;
-        email: string;
-        type: TokenType;
-        expiresIn: Date;
-        createdAt: Date;
+        challengeId: string;
+        code: string;
     }> {
-        const token = randomInt(100000, 999999).toString(); // 6-digit code
-        const expiresIn = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+        const challengeId = randomUUID();
+        const code = randomInt(100000, 1000000).toString();
+        const tokenKey = this.getTokenKey(challengeId);
+        const tokenData: TwoFactorToken = {
+            email,
+            code,
+        };
 
-        return this.prismaService.$transaction(async (tx) => {
-            await tx.token.deleteMany({
-                where: {
-                    email,
-                    type: TokenType.TWO_FACTOR,
-                },
-            });
+        await this.redisService.setWithTTL(
+            tokenKey,
+            JSON.stringify(tokenData),
+            TWO_FACTOR_CONFIG.TOKEN_TTL_SECONDS,
+        );
 
-            return tx.token.create({
-                data: {
-                    email,
-                    token,
-                    expiresIn,
-                    type: TokenType.TWO_FACTOR,
-                },
-            });
-        });
+        return {
+            challengeId,
+            code,
+        };
+    }
+
+    private getTokenKey(challengeId: string): string {
+        return `${TWO_FACTOR_REDIS_KEYS.TOKEN}:${challengeId}`;
+    }
+
+    private getAttemptKey(challengeId: string): string {
+        return `${TWO_FACTOR_REDIS_KEYS.ATTEMPTS}:${challengeId}`;
+    }
+
+    private isTwoFactorToken(value: unknown): value is TwoFactorToken {
+        if (typeof value !== 'object' || value === null) {
+            return false;
+        }
+
+        const token = value as Record<string, unknown>;
+
+        return (
+            typeof token.email === 'string' && typeof token.code === 'string'
+        );
     }
 }
