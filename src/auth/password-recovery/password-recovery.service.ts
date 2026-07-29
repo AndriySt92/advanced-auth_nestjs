@@ -1,25 +1,30 @@
 import {
-    BadRequestException,
     Injectable,
+    InternalServerErrorException,
     Logger,
     NotFoundException,
 } from '@nestjs/common';
 import { hash } from 'argon2';
 import { v4 as uuidv4 } from 'uuid';
 
-import { TokenType } from '@/generated/prisma/client';
 import { MailService } from '@/libs/mail/mail.service';
-import { PrismaService } from '@/prisma/prisma.service';
+import { RedisService } from '@/redis/redis.service';
 import { UserService } from '@/user/user.service';
 
+import { REDIS_KEYS, TOKEN_TTL } from './constants/password-recovery.constants';
 import { NewPasswordDto, ResetPasswordDto } from './dto';
+
+type PasswordResetToken = {
+    email: string;
+    token: string;
+};
 
 @Injectable()
 export class PasswordRecoveryService {
     private readonly logger = new Logger(PasswordRecoveryService.name);
 
     public constructor(
-        private readonly prismaService: PrismaService,
+        private readonly redisService: RedisService,
         private readonly userService: UserService,
         private readonly mailService: MailService,
     ) {}
@@ -46,29 +51,30 @@ export class PasswordRecoveryService {
     }
 
     public async newPassword(dto: NewPasswordDto): Promise<void> {
-        const existingToken = await this.prismaService.token.findUnique({
-            where: {
-                token: dto.token,
-                type: TokenType.PASSWORD_RESET,
-            },
-        });
+        this.logger.debug(`Received password reset token`);
 
-        if (!existingToken) {
+        const tokenKey = this.getTokenKey(dto.token);
+        const tokenData = await this.redisService.get(tokenKey);
+
+        if (!tokenData) {
             throw new NotFoundException(
-                'Token not found. Please check the entered token or request a new one.',
+                'Token not found or expired. Please check the entered token or request a new one.',
             );
         }
+        const parsedToken: unknown = JSON.parse(tokenData);
 
-        const hasExpired = new Date(existingToken.expiresIn) < new Date();
+        if (!this.isPasswordResetToken(parsedToken)) {
+            this.logger.error(
+                `Invalid password reset token data for password reset`,
+            );
 
-        if (hasExpired) {
-            throw new BadRequestException(
-                'Token has expired. Please request a new token to confirm the password reset.',
+            throw new InternalServerErrorException(
+                'Invalid password reset token data.',
             );
         }
 
         const existingUser = await this.userService.findByEmail(
-            existingToken.email,
+            parsedToken.email,
         );
 
         if (!existingUser) {
@@ -76,51 +82,44 @@ export class PasswordRecoveryService {
                 'User with the provided email does not exist. Please check the email address and try again.',
             );
         }
+        const hashedPassword = await hash(dto.password);
 
-        await this.prismaService.$transaction(async (tx) => {
-            await tx.user.update({
-                where: { id: existingUser.id },
-                data: { password: await hash(dto.password) },
-            });
-            await tx.token.delete({
-                where: { id: existingToken.id, type: TokenType.PASSWORD_RESET },
-            });
-        });
+        await this.userService.updatePassword(existingUser.id, hashedPassword);
 
+        await this.redisService.del(tokenKey);
         this.logger.log(
             `Password successfully reset for user ${existingUser.id}`,
         );
     }
 
     private async generatePasswordResetToken(email: string): Promise<{
-        token: string;
-        id: string;
         email: string;
-        type: TokenType;
-        expiresIn: Date;
-        createdAt: Date;
+        token: string;
     }> {
         const token = uuidv4();
-        const expiresIn = new Date(Date.now() + 3600 * 1000); // 1 hour
 
-        const result = await this.prismaService.$transaction(async (tx) => {
-            await tx.token.deleteMany({
-                where: { email, type: TokenType.PASSWORD_RESET },
-            });
-            return tx.token.create({
-                data: {
-                    email,
-                    token,
-                    expiresIn,
-                    type: TokenType.PASSWORD_RESET,
-                },
-            });
-        });
-
-        this.logger.debug(
-            `Generated password reset token for ${email} (expires at ${expiresIn.toISOString()})`,
+        await this.redisService.setWithTTL(
+            this.getTokenKey(token),
+            JSON.stringify({ email }),
+            TOKEN_TTL.SECONDS,
         );
 
-        return result;
+        this.logger.debug(`Generated password reset token for ${email}`);
+
+        return {
+            email,
+            token,
+        };
+    }
+    private getTokenKey(token: string): string {
+        return `${REDIS_KEYS.TOKEN}:${token}`;
+    }
+
+    private isPasswordResetToken(value: unknown): value is PasswordResetToken {
+        if (typeof value !== 'object' || value === null) {
+            return false;
+        }
+        const token = value as Record<string, unknown>;
+        return typeof token.email === 'string';
     }
 }
