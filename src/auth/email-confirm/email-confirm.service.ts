@@ -1,25 +1,30 @@
+import { randomUUID } from 'node:crypto';
+
 import {
-    BadRequestException,
     Injectable,
+    InternalServerErrorException,
     Logger,
     NotFoundException,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { v4 as uuidv4 } from 'uuid';
 
-import { TokenType } from '@/generated/prisma/client';
 import { MailService } from '@/libs/mail/mail.service';
-import { PrismaService } from '@/prisma/prisma.service';
+import { RedisService } from '@/redis/redis.service';
 import { UserService } from '@/user/user.service';
 
 import { SessionService } from '../session/session.service';
+import { REDIS_KEY_TOKEN, TOKEN_TTL_SECONDS } from './email-confirm.constants';
+
+interface EmailVerificationToken {
+    email: string;
+}
 
 @Injectable()
 export class EmailConfirmService {
     private readonly logger = new Logger(EmailConfirmService.name);
 
     public constructor(
-        private readonly prismaService: PrismaService,
+        private readonly redisService: RedisService,
         private readonly mailService: MailService,
         private readonly userService: UserService,
         private readonly sessionService: SessionService,
@@ -30,32 +35,32 @@ export class EmailConfirmService {
             `Verifying email with token: ${token.substring(0, 8)}...`,
         );
 
-        const existingToken = await this.prismaService.token.findUnique({
-            where: {
-                token: token,
-                type: TokenType.VERIFICATION,
-            },
-        });
+        const tokenKey = this.getTokenKey(token);
+        const tokenData = await this.redisService.get(tokenKey);
 
-        if (!existingToken) {
+        if (!tokenData) {
             throw new NotFoundException(
-                'Verification token not found. Please make sure you provided a valid token.',
+                'Verification token not found or expired. Please make sure you provided a valid token or request a new verification token.',
             );
         }
 
-        this.logger.log(`Token found for email: ${existingToken.email}`);
+        const parsedToken: unknown = JSON.parse(tokenData);
 
-        const hasExpired = new Date(existingToken.expiresIn) < new Date();
+        if (!this.isEmailVerificationToken(parsedToken)) {
+            this.logger.error(
+                'Invalid email verification token data stored in Redis',
+            );
 
-        if (hasExpired) {
-            throw new BadRequestException(
-                'Verification token has expired. Please request a new verification token.',
+            throw new InternalServerErrorException(
+                'Invalid email verification token data.',
             );
         }
 
-        const existingUser = await this.userService.findByEmail(
-            existingToken.email,
-        );
+        const email = parsedToken.email;
+
+        this.logger.log(`Verification token found for email: ${email}`);
+
+        const existingUser = await this.userService.findByEmail(email);
 
         if (!existingUser) {
             throw new NotFoundException(
@@ -67,28 +72,15 @@ export class EmailConfirmService {
             `User found: ${existingUser.id} (${existingUser.email})`,
         );
 
-        await this.prismaService.$transaction([
-            this.prismaService.user.update({
-                where: {
-                    id: existingUser.id,
-                },
-                data: {
-                    isVerified: true,
-                },
-            }),
-            this.prismaService.token.delete({
-                where: {
-                    id: existingToken.id,
-                    type: TokenType.VERIFICATION,
-                },
-            }),
-        ]);
+        await this.userService.markAsVerified(existingUser.id);
+
+        await this.redisService.del(tokenKey);
 
         this.logger.log(
-            `User ${existingUser.id} marked as verified, token deleted`,
+            `User ${existingUser.id} marked as verified and verification token deleted`,
         );
 
-        await this.sessionService.saveSession(req, existingUser);
+        await this.sessionService.createAuthenticatedSession(req, existingUser);
 
         this.logger.log(`Session saved for user ${existingUser.id}`);
     }
@@ -106,41 +98,40 @@ export class EmailConfirmService {
         return true;
     }
 
-    private async generateVerificationToken(email: string) {
+    private async generateVerificationToken(
+        email: string,
+    ): Promise<EmailVerificationToken & { token: string }> {
         this.logger.debug(`Generating new verification token for ${email}`);
 
-        const token = uuidv4();
-        const expiresIn = new Date(new Date().getTime() + 3600 * 1000);
+        const token = randomUUID();
 
-        const existingToken = await this.prismaService.token.findFirst({
-            where: {
-                email,
-                type: TokenType.VERIFICATION,
-            },
-        });
-
-        if (existingToken) {
-            await this.prismaService.token.delete({
-                where: {
-                    id: existingToken.id,
-                    type: TokenType.VERIFICATION,
-                },
-            });
-        }
-
-        const verificationToken = await this.prismaService.token.create({
-            data: {
-                email,
-                token,
-                expiresIn,
-                type: TokenType.VERIFICATION,
-            },
-        });
-
-        this.logger.debug(
-            `New verification token created for ${email}, expires at ${expiresIn.toISOString()}`,
+        await this.redisService.setWithTTL(
+            this.getTokenKey(token),
+            JSON.stringify({ email }),
+            TOKEN_TTL_SECONDS,
         );
 
-        return verificationToken;
+        this.logger.debug(`New verification token created for ${email}`);
+
+        return {
+            email,
+            token,
+        };
+    }
+
+    private getTokenKey(token: string): string {
+        return `${REDIS_KEY_TOKEN}:${token}`;
+    }
+
+    private isEmailVerificationToken(
+        value: unknown,
+    ): value is EmailVerificationToken {
+        if (typeof value !== 'object' || value === null) {
+            return false;
+        }
+
+        const token = value as Record<string, unknown>;
+
+        return typeof token.email === 'string';
     }
 }
